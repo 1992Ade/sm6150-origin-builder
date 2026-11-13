@@ -35,6 +35,8 @@ The approach is inspired by
 and [riarumoda/perf_neon-builder](https://github.com/riarumoda/perf_neon-builder)
 (which already builds this same sm6150 kernel for sweet).
 
+This kernel is intended to work with this **[Project Infinity X]([https://gitlab.com/simonpunk/susfs4ksu](https://projectinfinity-x.com/downloads/sweet))** ROM that uses Spiteful kernel already.
+
 ## 📦 Which zip should I download?
 
 Each release ships two variants:
