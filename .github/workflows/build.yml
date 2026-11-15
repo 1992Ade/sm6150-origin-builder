@@ -397,6 +397,17 @@ jobs:
           [ -f "net/netfilter/xt_qtaguid.c" ] && apply_ds_patch "$DROIDSPACES_XT_QTAGUID" "xt_qtaguid panic fix"
           apply_ds_patch "$DROIDSPACES_CGROUP" "cgroup prefix fix"
 
+          # 4.14 compat: this tree predates the slab_flags_t typedef. The CONFIG_MEMCG we enable
+          # below makes include/linux/slab.h define SLAB_ACCOUNT as ((slab_flags_t __force)...)
+          # under CONFIG_MEMCG_KMEM, which breaks kernel/fork.c ("use of undeclared identifier
+          # 'slab_flags_t'"). Add the mainline typedef if the tree lacks it.
+          if ! grep -qE 'typedef[^;]*\bslab_flags_t\b' include/linux/types.h; then
+            sed -i '/^typedef unsigned __bitwise gfp_t;/a typedef unsigned __bitwise slab_flags_t; /* compat: Droidspaces CONFIG_MEMCG */' include/linux/types.h
+            grep -qE 'typedef[^;]*\bslab_flags_t\b' include/linux/types.h \
+              && echo "-- Droidspaces: added slab_flags_t typedef (4.14 MEMCG compat)" \
+              || echo "::warning::Droidspaces: could not add slab_flags_t typedef — if the build fails on it, drop CONFIG_MEMCG"
+          fi
+
           cat >> "$FINAL_DEFCONFIG" <<'EOF'
           CONFIG_SYSCTL=y
           CONFIG_SYSVIPC=y
