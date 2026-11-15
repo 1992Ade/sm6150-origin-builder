@@ -135,6 +135,7 @@ A manual run for a version that is already released **replaces** that release (u
 | Problem | What to do |
 |---|---|
 | *Integrate OriginSU* fails with "SuSFS patch did not apply" | JackA1ltman's 4.14 patch no longer matches the kernel — check `build-susfs.log`; the `-manual` variant still builds |
+| Compile fails with `use of undeclared identifier 'slab_flags_t'` | Triggered by Droidspaces' `CONFIG_MEMCG` on this pre-`slab_flags_t` 4.14 base. The *Extra features* step adds the missing typedef automatically; if it ever reappears, drop `CONFIG_MEMCG=y` from the Droidspaces block |
 | *Integrate OriginSU* fails with "hook … missing" | A hook script no longer matches the kernel code — check the run log |
 | Build fails with "You lost … hook" / "incompatible hook" | A new OriginSU version requires a different hook — re-run with an older `originsu_ref` |
 | Build fails with KPM errors | Re-run manually with `kpm` disabled |
