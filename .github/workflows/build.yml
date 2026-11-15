@@ -397,16 +397,17 @@ jobs:
           [ -f "net/netfilter/xt_qtaguid.c" ] && apply_ds_patch "$DROIDSPACES_XT_QTAGUID" "xt_qtaguid panic fix"
           apply_ds_patch "$DROIDSPACES_CGROUP" "cgroup prefix fix"
 
-          # 4.14 compat: this tree predates the slab_flags_t typedef. The CONFIG_MEMCG we enable
-          # below makes include/linux/slab.h define SLAB_ACCOUNT as ((slab_flags_t __force)...)
-          # under CONFIG_MEMCG_KMEM, which breaks kernel/fork.c ("use of undeclared identifier
-          # 'slab_flags_t'"). Add the mainline typedef if the tree lacks it.
-          if ! grep -qE 'typedef[^;]*\bslab_flags_t\b' include/linux/types.h; then
-            sed -i '/^typedef unsigned __bitwise gfp_t;/a typedef unsigned __bitwise slab_flags_t; /* compat: Droidspaces CONFIG_MEMCG */' include/linux/types.h
-            grep -qE 'typedef[^;]*\bslab_flags_t\b' include/linux/types.h \
-              && echo "-- Droidspaces: added slab_flags_t typedef (4.14 MEMCG compat)" \
-              || echo "::warning::Droidspaces: could not add slab_flags_t typedef — if the build fails on it, drop CONFIG_MEMCG"
-          fi
+          # NOTE: CONFIG_MEMCG and CONFIG_CFS_BANDWIDTH are intentionally NOT enabled below
+          # (both are off in the stock sweet_defconfig). On this Spiteful 4.14 tree they do not
+          # build:
+          #   * CONFIG_MEMCG         -> mm/memcontrol.c: "redefinition of 'mem_cgroup_is_root'"
+          #   * CONFIG_CFS_BANDWIDTH -> kernel/sched/fair.c CFS-bandwidth code is a partial
+          #     backport ("undeclared 'qcfs_rq' / 'pelt_clock_throttled'").
+          # Droidspaces lists both as OPTIONAL (Documentation/Kernel-Configuration.md): without
+          # them only per-container memory / --cpus / swap limits are unavailable — namespaces,
+          # the pids/freezer/devices/net cgroups, overlayfs and networking all work.
+          # CONFIG_CGROUP_PIDS stays on: this kernel is monolithic (# CONFIG_MODULES is not set),
+          # so the symbol-CRC bootloop risk that doc warns about does not apply here.
 
           cat >> "$FINAL_DEFCONFIG" <<'EOF'
           CONFIG_SYSCTL=y
@@ -424,8 +425,8 @@ jobs:
           CONFIG_FAIR_GROUP_SCHED=y
           CONFIG_CGROUP_FREEZER=y
           CONFIG_CGROUP_NET_PRIO=y
-          CONFIG_MEMCG=y
-          CONFIG_CFS_BANDWIDTH=y
+          # CONFIG_MEMCG is not set
+          # CONFIG_CFS_BANDWIDTH is not set
           CONFIG_CGROUP_PIDS=y
           CONFIG_CGROUP_CPUACCT=y
           CONFIG_DEVTMPFS=y
