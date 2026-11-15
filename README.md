@@ -28,7 +28,17 @@ On top of OriginSU, every build enables the same hardening/usability modules as 
 | **NoMount** | [maxsteeel](https://github.com/maxsteeel/nomount) | Prevents unwanted mounts used for root detection | `CONFIG_NOMOUNT=y` |
 | **Droidspaces** | [ravindu644](https://github.com/ravindu644/Droidspaces-OSS) | Namespace/cgroup isolation to run isolated Android/Linux spaces | `CONFIG_NAMESPACES`, `CONFIG_*_NS`, cgroups, netfilter… |
 
-> **Droidspaces note:** it enables `CONFIG_CFS_BANDWIDTH=y`, applies two non-GKI patches and adds the namespace/cgroup configs. This Spiteful tree already uses the `kernel/cgroup/cgroup.c` layout, so the cgroup patch applies as-is; a fallback also handles single-file (`kernel/cgroup.c`) trees. If a patch ever stops fitting, it is skipped with a `::warning` and the build continues with the configs enabled. If you use Droidspaces with a systemd-based Linux space, mask the `NetworkManager` and `wpa_supplicant` services inside it (as noted upstream).
+> ### Droidspaces — what works and what doesn't on this kernel
+> **Droidspaces works** (containers, namespaces, overlayfs and networking are all enabled). Two of its *optional* configs are **deliberately left off** because they don't build on this Spiteful 4.14 tree (both are also off in the stock defconfig):
+>
+> | Config left off | Build error if forced on | What you lose in Droidspaces |
+> |---|---|---|
+> | `CONFIG_MEMCG` | `mm/memcontrol.c: redefinition of 'mem_cgroup_is_root'` | Per-container **memory limit** (and, with `MEMCG_SWAP`, the **swap limit**) — the app greys out those toggles |
+> | `CONFIG_CFS_BANDWIDTH` | `kernel/sched/fair.c: undeclared 'qcfs_rq' / 'pelt_clock_throttled'` (partial backport) | Per-container **CPU limit** (`--cpus`) — greyed out |
+>
+> Droidspaces' own docs list both as optional: *"without these two options everything else works; `--cpus` and the memory/swap limits are skipped with a warning."* Everything else — namespaces, the **pids** (`--pids-limit`), freezer, devices and net cgroups, overlayfs and NAT/macvlan networking — is enabled. `CONFIG_CGROUP_PIDS` is kept on safely because this kernel is monolithic (no loadable vendor modules, so no symbol-CRC bootloop risk).
+>
+> The cgroup patch applies as-is (this tree uses the `kernel/cgroup/cgroup.c` layout; a fallback also handles single-file `kernel/cgroup.c` trees). If you use Droidspaces with a systemd-based Linux space, mask the `NetworkManager` and `wpa_supplicant` services inside it (as noted upstream).
 
 ---
 
@@ -142,7 +152,7 @@ A manual run for a version that is already released **replaces** that release (u
 | Problem | What to do |
 |---|---|
 | *Integrate OriginSU* fails with "SuSFS patch did not apply" | JackA1ltman's 4.14 patch no longer matches the kernel — check `build-susfs.log`; the `-manual` variant still builds |
-| Compile fails with `use of undeclared identifier 'slab_flags_t'` | Triggered by Droidspaces' `CONFIG_MEMCG` on this pre-`slab_flags_t` 4.14 base. The *Extra features* step adds the missing typedef automatically; if it ever reappears, drop `CONFIG_MEMCG=y` from the Droidspaces block |
+| Compile fails in `mm/memcontrol.c`, `kernel/sched/fair.c`, or on `slab_flags_t` | These come from `CONFIG_MEMCG` / `CONFIG_CFS_BANDWIDTH`, which this WALT-based 4.14 tree can't build. The *Extra features* step already leaves both off — if you re-add them, expect these errors back |
 | *Integrate OriginSU* fails with "hook … missing" | A hook script no longer matches the kernel code — check the run log |
 | Build fails with "You lost … hook" / "incompatible hook" | A new OriginSU version requires a different hook — re-run with an older `originsu_ref` |
 | Build fails with KPM errors | Re-run manually with `kpm` disabled |
