@@ -39,7 +39,14 @@ On top of OriginSU, every build enables the same hardening/usability modules as 
 | Redmi Note 10 Pro (global) | `sweet` |
 | Redmi Note 10 Pro Max (India) | `sweetin` |
 
-**Requirement:** a ROM that runs on this sm6150 4.14 kernel (Spiteful / crDroid `17.0`). I suggest **[Project Infinity-X for sweet](https://projectinfinity-x.com/downloads/sweet)**, which already ships the Spiteful kernel. MIUI / HyperOS are **not** supported.
+**Requirement:** a ROM that runs on this sm6150 4.14 kernel (Spiteful / crDroid `17.0`). Confirmed working on:
+
+| ROM | Link |
+|---|---|
+| **Project Infinity-X** (ships the Spiteful kernel) | [projectinfinity-x.com/sweet](https://projectinfinity-x.com/downloads/sweet) |
+| **VoltageOS** | [voltageos.com/sweet](https://www.voltageos.com/devices/download/sweet) |
+
+Other AOSP-based ROMs on the same Spiteful / crDroid `17.0` kernel should work too. MIUI / HyperOS are **not** supported.
 
 ---
 
