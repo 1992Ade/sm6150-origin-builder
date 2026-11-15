@@ -9,11 +9,26 @@
 
 This repository automates the compilation of a custom **Linux 4.14** kernel for the **Redmi Note 10 Pro / Pro Max** (`sweet` / `sweetin`, Snapdragon 732G). It is based on the **Spiteful kernel** by [tbyool](https://github.com/tbyool/android_kernel_xiaomi_sm6150) (branch `17.0`, forked from crDroid), the kernel shipped by the [Project Infinity-X](https://projectinfinity-x.com/downloads/sweet) ROM. Check out **[riarumoda](https://github.com/riarumoda/perf_neon-builder)** for the original sm6150 work with BakaSU, other devices and ROMs.
 
-Every build integrates the **[OriginSU](https://github.com/samakshkambxj/OriginSU)** kernel-based root solution and **[SuSFS](https://gitlab.com/simonpunk/susfs4ksu)** (4.14 backport by [JackA1ltman](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd)), and is packaged as a recovery-flashable `.zip` (TWRP / OrangeFox) with AnyKernel3.
+Every build integrates the **[OriginSU](https://github.com/samakshkambxj/OriginSU)** kernel-based root solution and **[SuSFS](https://gitlab.com/simonpunk/susfs4ksu)** (4.14 backport by [JackA1ltman](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd)) — plus **Baseband Guard**, **NoMount** and **Droidspaces** (see [Included features](#-included-features)) — and is packaged as a recovery-flashable `.zip` (TWRP / OrangeFox) with AnyKernel3.
 
 **Fully automated:** a GitHub Actions workflow checks every week (Sunday) for a new OriginSU release. As soon as a new version is out **with its manager APK**, the kernel is rebuilt with that exact OriginSU version and a new GitHub Release is published automatically — no manual action needed.
 
 The whole build lives in a single workflow file: this repository contains no copy of the kernel, OriginSU or SuSFS, they are downloaded from their official repositories at build time.
+
+---
+
+## 🧩 Included Features
+
+On top of OriginSU, every build enables the same hardening/usability modules as the base [perf_neon-builder](https://github.com/riarumoda/perf_neon-builder) for the `sweet` device:
+
+| Feature | Upstream | What it does | Kernel config |
+|---|---|---|---|
+| **SuSFS** | [simonpunk](https://gitlab.com/simonpunk/susfs4ksu) | Hides root/mounts from detection (`-susfs` variant only) | `CONFIG_KSU_SUSFS_*` |
+| **Baseband Guard** | [vc-teahouse](https://github.com/vc-teahouse/Baseband-guard) | LSM that blocks writes to the modem/baseband partitions | `CONFIG_BBG=y` |
+| **NoMount** | [maxsteeel](https://github.com/maxsteeel/nomount) | Prevents unwanted mounts used for root detection | `CONFIG_NOMOUNT=y` |
+| **Droidspaces** | [ravindu644](https://github.com/ravindu644/Droidspaces-OSS) | Namespace/cgroup isolation to run isolated Android/Linux spaces | `CONFIG_NAMESPACES`, `CONFIG_*_NS`, cgroups, netfilter… |
+
+> **Droidspaces note:** it enables `CONFIG_CFS_BANDWIDTH=y`, applies two non-GKI patches and adds the namespace/cgroup configs. This Spiteful tree already uses the `kernel/cgroup/cgroup.c` layout, so the cgroup patch applies as-is; a fallback also handles single-file (`kernel/cgroup.c`) trees. If a patch ever stops fitting, it is skipped with a `::warning` and the build continues with the configs enabled. If you use Droidspaces with a systemd-based Linux space, mask the `NetworkManager` and `wpa_supplicant` services inside it (as noted upstream).
 
 ---
 
@@ -180,6 +195,9 @@ This project relies on the incredible work of the following open-source projects
 * **[JackA1ltman](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd)** — For the 4.14 SuSFS backport and the non-GKI hook scripts.
 * **[backslashxx](https://github.com/backslashxx)** — For the scope-minimized hooks those scripts are based on.
 * **[simonpunk](https://gitlab.com/simonpunk/susfs4ksu)** — For SuSFS.
+* **[vc-teahouse](https://github.com/vc-teahouse/Baseband-guard)** — For Baseband Guard.
+* **[maxsteeel](https://github.com/maxsteeel/nomount)** — For NoMount.
+* **[ravindu644](https://github.com/ravindu644/Droidspaces-OSS)** — For Droidspaces.
 * **[Neutron Toolchains](https://github.com/Neutron-Toolchains)** — For the Clang toolchain.
 * **[tiann/KernelSU](https://github.com/tiann/KernelSU)** — The project OriginSU is built upon.
 
