@@ -7,8 +7,10 @@ name: Build sweet Kernel (Spiteful) with OriginSU
 #
 # OriginSU is discontinued: the project became KazeSU (https://github.com/KazeSU/KazeSU).
 # This builder is frozen on the last OriginSU release, v4.3.0, kept in the KazeSU repository
-# (tag v4.3.0, GitHub release "legacy-v4.3.0"). No scheduled builds any more: run it manually
-# to pick up kernel updates. KazeSU kernels: https://github.com/1992Ade/sm6150-KazeSU-builder
+# (tag v4.3.0, GitHub release "legacy-v4.3.0"). KazeSU v1.x does not build on this 4.14 tree
+# (its SELinux code needs the 5.10+ struct selinux_state layout: policy/policy_mutex/status_lock/
+# status_page; this tree only has avc + ss), so OriginSU v4.3.0 stays the recommended root.
+# 4.14 (msm-4.14) is the newest Android kernel for SM6150/SM7150. Manual runs only.
 
 on:
   workflow_dispatch:
@@ -19,6 +21,10 @@ on:
         default: "v4.3.0"
       kpm:
         description: "Enable CONFIG_KPM"
+        type: boolean
+        default: false
+      droidspaces_memcg:
+        description: "Droidspaces: enable CONFIG_MEMCG (per-container memory/swap limits; experimental, off in stock Spiteful)"
         type: boolean
         default: false
       publish:
@@ -107,6 +113,7 @@ jobs:
       NONGKI: https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/${{ needs.check.outputs.nongki_sha }}/Patches
       # KPM is off by default: only enabled when ticked
       KPM: ${{ inputs.kpm }}
+      DS_MEMCG: ${{ inputs.droidspaces_memcg }}
 
     steps:
       - name: Install build dependencies
@@ -176,6 +183,32 @@ jobs:
           CONFIG_DM_BOW=y
           EOF
           sed -i 's/^[[:space:]]*CONFIG_/CONFIG_/; s/^[[:space:]]*# CONFIG_/# CONFIG_/' "$FINAL_DEFCONFIG"
+
+      - name: Optimizations
+        working-directory: ${{ env.KERNEL_DIR }}
+        # Spiteful already has ThinLTO, Polly, Cortex-A76 code tuning (-mcpu=cortex-a76, ARMv8.2),
+        # zstd for ZRAM, the TTL/HL targets, WireGuard, Simple LMK, hardware access/dirty-bit
+        # management and an updated LZ4 with arm64 asm.
+        # Only what is missing is added here (low risk, checked in the compile step):
+        run: |
+          # 1) Power-efficient workqueues: queue work on CPUs that are already awake instead of
+          #    waking an idle core just for it (off in sweet_defconfig).
+          echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$FINAL_DEFCONFIG"
+
+          # 2) vm.swappiness up to 200 (4.14 caps it at 100). The reclaim math already uses
+          #    file_prio = 200 - anon_prio, so 200 is valid: it lets userspace prefer swapping to
+          #    ZRAM over dropping file cache. The value set by the ROM is unchanged.
+          if grep -q 'static int two_hundred = 200;' kernel/sysctl.c; then
+            echo "-- swappiness: already patched"
+          elif grep -q 'file_prio = 200 - anon_prio;' mm/vmscan.c \
+               && awk '/\.procname[[:space:]]*=[[:space:]]*"swappiness"/{f=1} f&&/\.extra2/{print; exit}' kernel/sysctl.c | grep -q '&one_hundred'; then
+            sed -i 's/^static int one_hundred = 100;$/&\nstatic int two_hundred = 200;/' kernel/sysctl.c
+            sed -i '/\.procname[[:space:]]*=[[:space:]]*"swappiness"/,/}/ s/\.extra2\([[:space:]]*\)=[[:space:]]*&one_hundred/.extra2\1= \&two_hundred/' kernel/sysctl.c
+            awk '/\.procname[[:space:]]*=[[:space:]]*"swappiness"/{f=1} f&&/\.extra2/{print; exit}' kernel/sysctl.c | grep -q '&two_hundred' \
+              && echo "-- swappiness max = 200" || { echo "::error::swappiness patch did not apply"; exit 1; }
+          else
+            echo "::warning::swappiness patch skipped (kernel/sysctl.c or mm/vmscan.c changed upstream)"
+          fi
 
       - name: Integrate OriginSU (instead of BakaSU)
         working-directory: ${{ env.KERNEL_DIR }}
@@ -371,6 +404,13 @@ jobs:
           curl -LSs --fail --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" "$NOMOUNT_SETUP_URI" | bash -s "$NOMOUNT_SETUP_BRANCH" \
             || { echo "::error::NoMount setup failed"; exit 1; }
           echo "CONFIG_NOMOUNT=y" >> "$FINAL_DEFCONFIG"
+          # OriginSU v4.3.0 drives NoMount itself (OriginMount screen -> "nomount" mode): ksud
+          # probes the built-in driver first and needs driver API >= 22 (NoMount v2.2.0+). v2.3.0
+          # reports API 23 with the same wire structures. Do not install the NoMount module zip on top.
+          NM_API="$(sed -n 's/^#define NOMOUNT_BASE_VERSION "\([0-9]*\)".*/\1/p' fs/nomount/nomount.h)"
+          echo "-- NoMount driver API: ${NM_API:-unknown}"
+          [ -n "$NM_API" ] && [ "$NM_API" -ge 22 ] \
+            || { echo "::error::NoMount API ${NM_API:-unknown} < 22: OriginSU v4.3.0 would refuse the driver"; exit 1; }
 
           ########## 3) Droidspaces (ravindu644) ##########
           echo "== Droidspaces =="
@@ -398,12 +438,19 @@ jobs:
           [ -f "net/netfilter/xt_qtaguid.c" ] && apply_ds_patch "$DROIDSPACES_XT_QTAGUID" "xt_qtaguid panic fix"
           apply_ds_patch "$DROIDSPACES_CGROUP" "cgroup prefix fix"
 
-          # NOTE: CONFIG_MEMCG and CONFIG_CFS_BANDWIDTH are intentionally NOT enabled below
-          # (both are off in the stock sweet_defconfig). On this Spiteful 4.14 tree they do not
-          # build:
-          #   * CONFIG_MEMCG         -> mm/memcontrol.c: "redefinition of 'mem_cgroup_is_root'"
-          #   * CONFIG_CFS_BANDWIDTH -> kernel/sched/fair.c CFS-bandwidth code is a partial
-          #     backport ("undeclared 'qcfs_rq' / 'pelt_clock_throttled'").
+          # NOTE: CONFIG_MEMCG and CONFIG_CFS_BANDWIDTH are off in the stock sweet_defconfig and
+          # do not build as-is on this Spiteful 4.14 tree:
+          #   * CONFIG_MEMCG -> two compile errors, both fixed below when the
+          #     droidspaces_memcg input is ticked (experimental, off by default):
+          #       - include/linux/slab.h: SLAB_ACCOUNT uses slab_flags_t, a 4.15 type this tree
+          #         does not define -> use the plain constant like every other SLAB_* flag;
+          #       - mm/memcontrol.c: mem_cgroup_is_root() is also defined in memcontrol.h (an
+          #         earlier backport) -> drop the duplicate.
+          #     With both fixes, mm/, kernel/cgroup/, simple_lmk and every other memcg user build.
+          #   * CONFIG_CFS_BANDWIDTH stays off: the CFS-bandwidth code in kernel/sched/fair.c is an
+          #     incomplete backport mixing three scheduler generations (undeclared 'qcfs_rq', a loop
+          #     closed early, h_nr_running added twice on unthrottle, 'pelt_clock_throttled' from
+          #     6.18). Fixing it means porting the whole throttle path: not worth the risk.
           # Droidspaces lists both as OPTIONAL (Documentation/Kernel-Configuration.md): without
           # them only per-container memory / --cpus / swap limits are unavailable — namespaces,
           # the pids/freezer/devices/net cgroups, overlayfs and networking all work.
@@ -496,6 +543,26 @@ jobs:
           CONFIG_NETFILTER_XT_TARGET_NFLOG=y
           EOF
 
+          ########## 3b) Droidspaces memory limits (optional CONFIG_MEMCG) ##########
+          if [ "$DS_MEMCG" = "true" ]; then
+            echo "-- Droidspaces: enabling CONFIG_MEMCG (memory/swap limits)"
+            sed -i 's/((slab_flags_t __force)0x04000000U)/0x04000000UL/' include/linux/slab.h
+            grep -q 'slab_flags_t' include/linux/slab.h && { echo "::error::slab_flags_t still used in slab.h"; exit 1; }
+            python3 - <<'PY'
+          import re
+          p = "mm/memcontrol.c"
+          s = open(p).read()
+          dup = "static inline bool mem_cgroup_is_root(struct mem_cgroup *memcg)\n{\n\treturn (memcg == root_mem_cgroup);\n}\n\n"
+          if dup in s and "mem_cgroup_is_root" in open("include/linux/memcontrol.h").read():
+              open(p, "w").write(s.replace(dup, "", 1))
+              print("-> duplicate mem_cgroup_is_root() removed from mm/memcontrol.c")
+          else:
+              print("-> mm/memcontrol.c: no duplicate mem_cgroup_is_root() to remove")
+          PY
+            sed -i 's/^[[:space:]]*# CONFIG_MEMCG is not set$/CONFIG_MEMCG=y\nCONFIG_MEMCG_SWAP=y/' "$FINAL_DEFCONFIG"
+            grep -q '^[[:space:]]*CONFIG_MEMCG=y' "$FINAL_DEFCONFIG" || echo -e "CONFIG_MEMCG=y\nCONFIG_MEMCG_SWAP=y" >> "$FINAL_DEFCONFIG"
+          fi
+
           ########## 4) TCP BBR + fq ##########
           # Spiteful's sweet_defconfig defaults to BBRplus (out-of-tree BBR variant) on the cake
           # qdisc, without mainline BBR or fq. Default here: mainline BBR on fq, the pairing BBR
@@ -532,6 +599,14 @@ jobs:
           grep -E '^CONFIG_(TCP_CONG_BBR|TCP_CONG_BBRPLUS|DEFAULT_TCP_CONG|NET_SCH_FQ|NET_SCH_CAKE|NET_SCH_DEFAULT|DEFAULT_NET_SCH)=' out/.config || true
           grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"' out/.config || { echo "::error::BBR is not the default TCP congestion control"; exit 1; }
           grep -q '^CONFIG_DEFAULT_NET_SCH="fq"' out/.config  || { echo "::error::fq is not the default qdisc"; exit 1; }
+          echo "--- Optimizations ---"
+          for k in CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y CONFIG_CRYPTO_ZSTD=y CONFIG_IP_NF_TARGET_TTL=y CONFIG_IP6_NF_TARGET_HL=y CONFIG_LTO_CLANG=y; do
+            grep -qxF "$k" out/.config && echo "  $k" || { echo "::error::$k missing from the final config"; exit 1; }
+          done
+          if [ "$DS_MEMCG" = "true" ]; then
+            grep -qxF 'CONFIG_MEMCG=y' out/.config && echo "  CONFIG_MEMCG=y (Droidspaces memory limits)" \
+              || { echo "::error::droidspaces_memcg ticked but CONFIG_MEMCG is not set"; exit 1; }
+          fi
           if [ "$HOOK_MODE" = "susfs" ]; then
             grep -q '^CONFIG_KSU_SUSFS=y' out/.config || { echo "::error::CONFIG_KSU_SUSFS is not enabled"; exit 1; }
           else
@@ -577,7 +652,7 @@ jobs:
           sed -i 's/supported.versions=11-16/supported.versions=13-17/' AnyKernel3/anykernel.sh
           sed -i 's/KERNEL_BUILD_TYPE="Weekly"/KERNEL_BUILD_TYPE="OriginSU '"${ORIGINSU_TAG}"' ('"${HOOK_MODE}"')"/' AnyKernel3/anykernel.sh
           sed -i 's/sweet (sm6150)/sweet (SM6150) Spiteful + OriginSU/g' AnyKernel3/banner 2>/dev/null || true
-          ZIP="Spiteful-OriginSU-${ORIGINSU_TAG}-${HOOK_MODE}-sweet-$(date +%Y%m%d).zip"
+          ZIP="Spiteful-OriginSU-${ORIGINSU_TAG}-${HOOK_MODE}$( [ "$DS_MEMCG" = true ] && echo -memcg)-sweet-$(date +%Y%m%d).zip"
           (cd AnyKernel3 && zip -rq9 "../$ZIP" ./*)
           mkdir -p dist
           mv "$ZIP" dist/
@@ -619,6 +694,16 @@ jobs:
           pattern: sweet-OriginSU-*
           merge-multiple: true
 
+      - name: Fetch the OriginSU manager APK
+        # Same tag as the kernel (KazeSU/KazeSU release "legacy-<tag>"); arm64-v8a only.
+        run: |
+          gh release download "$ORIGINSU_TAG" --repo KazeSU/KazeSU \
+            --pattern 'OriginSU_*-arm64-v8a-release.apk' --dir dist
+          APK="$(ls dist/OriginSU_*-arm64-v8a-release.apk 2>/dev/null | head -n1)"
+          [ -n "$APK" ] || { echo "::error::OriginSU manager APK not found in KazeSU/KazeSU release $ORIGINSU_TAG"; exit 1; }
+          echo "MANAGER_APK=$(basename "$APK")" >> "$GITHUB_ENV"
+          echo "-> $(basename "$APK") ($(du -h "$APK" | cut -f1))"
+
       - name: Write release notes
         run: |
           ls dist/*.zip >/dev/null 2>&1 || { echo "::error::No zip was built"; exit 1; }
@@ -634,6 +719,8 @@ jobs:
           | Kernel | tbyool Spiteful \`${KERNEL_BRANCH}\` @ [\`${KERNEL_COMMIT}\`](https://github.com/${KERNEL_REPO}/commit/${KERNEL_COMMIT}) |
           | Kernel version | \`${KERNEL_RELEASE}\` |
           | Extra features | Baseband Guard · NoMount · Droidspaces · TCP BBR + fq (BBRplus/cake selectable) |
+          | Optimizations | power-efficient workqueues · \`vm.swappiness\` up to 200 (on top of Spiteful's own tuning) |
+          | Manager | \`${MANAGER_APK}\` (attached) |
           | Toolchain | ${TOOLCHAIN} |
           | Build date | $(date -u +%Y-%m-%d) |
 
@@ -641,11 +728,18 @@ jobs:
           - **\`-susfs-\`** — SuSFS inline hook: root + SuSFS hiding (recommended).
           - **\`-manual-\`** — Manual hook only, no SuSFS: try this if the SuSFS build does not boot.
 
-          Back up your \`boot\` and \`dtbo\` partitions first, flash from recovery, then install the
-          OriginSU manager from the [legacy-${ORIGINSU_TAG} release page](https://github.com/KazeSU/KazeSU/releases/tag/${ORIGINSU_TAG})
-          (OriginSU manager, not the KazeSU v1.x one).
+          Back up your \`boot\` and \`dtbo\` partitions first, flash from recovery, then install the attached
+          **OriginSU manager** (\`${MANAGER_APK}\`, same version as the kernel — not the KazeSU v1.x manager).
 
-          > This is the last OriginSU kernel. Future kernels: [sm6150-KazeSU-builder](https://github.com/1992Ade/sm6150-KazeSU-builder).
+          ### Modules — pick a mount mode
+          OriginSU mounts modules itself: open the manager's **OriginMount** screen and pick a mode.
+          In \`auto\` (default) nothing is mounted unless a metamodule is installed or Magic Mount is enabled.
+          **NoMount** is built into this kernel (no real mounts, nothing in \`/proc/mounts\`): choose \`nomount\`
+          and do not install the separate NoMount module zip.
+
+          > **Why OriginSU and not KazeSU?** KazeSU v1.x does not build on this Linux 4.14 kernel (its SELinux
+          > code needs 5.10+), and 4.14 is the newest Android kernel for this SoC. OriginSU \`${ORIGINSU_TAG}\`
+          > stays the recommended root here.
           EOF
           sed -i 's/^          //' notes.md
 
@@ -655,4 +749,4 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
             --title "sweet Spiteful OriginSU ${ORIGINSU_TAG}" \
             --notes-file notes.md --latest \
-            dist/*.zip dist/*.sha256 dist/config-*.txt
+            dist/*.zip dist/*.sha256 dist/config-*.txt dist/*.apk
