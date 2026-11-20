@@ -3,15 +3,24 @@
 [![Build](https://img.shields.io/badge/build-GitHub%20Actions-blue?logo=github-actions&logoColor=white)](https://github.com/1992Ade/sm6150-origin-builder/actions/workflows/build.yml)
 [![Latest release](https://img.shields.io/github/v/release/1992Ade/sm6150-origin-builder?label=latest&logo=github)](https://github.com/1992Ade/sm6150-origin-builder/releases/latest)
 
+> [!IMPORTANT]
+> **This is the last OriginSU kernel — development continues with KazeSU.**
+> OriginSU has been renamed and rebuilt as **[KazeSU](https://github.com/KazeSU/KazeSU)**, so `v4.3.0` is the final OriginSU release and this builder is frozen on it (no automatic builds; it is only re-run by hand to pick up kernel updates).
+> **All future kernels will be published in the new repository: [sm6150-KazeSU-builder](https://github.com/1992Ade/sm6150-KazeSU-builder).**
+>
+> The OriginSU `v4.3.0` code and manager remain available in the KazeSU repository ([tag `v4.3.0`, release "legacy-v4.3.0"](https://github.com/KazeSU/KazeSU/releases/tag/v4.3.0)). Keep using these OriginSU builds until KazeSU kernels are available for sweet, or if you need SuSFS features that KazeSU does not have.
+
 > **Your warranty is now void.** Flashing a custom kernel can brick your device. You are responsible for what you flash. Always keep a backup of your stock `boot` and `dtbo` partitions.
 
 ## 📱 About This Repository
 
 This repository automates the compilation of a custom **Linux 4.14** kernel for the **Redmi Note 10 Pro / Pro Max** (`sweet` / `sweetin`, Snapdragon 732G). It is based on the **Spiteful kernel** by [tbyool](https://github.com/tbyool/android_kernel_xiaomi_sm6150) (branch `17.0`, forked from crDroid), the kernel shipped by the [Project Infinity-X](https://projectinfinity-x.com/downloads/sweet) ROM. Check out **[riarumoda](https://github.com/riarumoda/perf_neon-builder)** for the original sm6150 work with BakaSU, other devices and ROMs.
 
-Every build integrates the **[OriginSU](https://github.com/samakshkambxj/OriginSU)** kernel-based root solution and **[SuSFS](https://gitlab.com/simonpunk/susfs4ksu)** (4.14 backport by [JackA1ltman](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd)) — plus **Baseband Guard**, **NoMount** and **Droidspaces** (see [Included features](#-included-features)) — and is packaged as a recovery-flashable `.zip` (TWRP / OrangeFox) with AnyKernel3.
+Every build integrates the **[OriginSU v4.3.0](https://github.com/KazeSU/KazeSU/releases/tag/v4.3.0)** kernel-based root solution and **[SuSFS](https://gitlab.com/simonpunk/susfs4ksu)** (4.14 backport by [JackA1ltman](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd)) — plus **Baseband Guard**, **NoMount**, **Droidspaces** and **TCP BBR + fq** (see [Included features](#-included-features)) — and is packaged as a recovery-flashable `.zip` (TWRP / OrangeFox) with AnyKernel3.
 
-**Fully automated:** a GitHub Actions workflow checks every week (Sunday) for a new OriginSU release. As soon as a new version is out **with its manager APK**, the kernel is rebuilt with that exact OriginSU version and a new GitHub Release is published automatically — no manual action needed.
+The XDA thread text (BBCode, ready to paste) is kept in [`docs/XDA_POST.txt`](docs/XDA_POST.txt).
+
+**Manual builds only:** OriginSU will not get new releases, so the weekly check was removed; new versions come from [sm6150-KazeSU-builder](https://github.com/1992Ade/sm6150-KazeSU-builder). Running the workflow by hand rebuilds OriginSU `v4.3.0` on the latest Spiteful kernel and replaces the release.
 
 The whole build lives in a single workflow file: this repository contains no copy of the kernel, OriginSU or SuSFS, they are downloaded from their official repositories at build time.
 
@@ -27,6 +36,7 @@ On top of OriginSU, every build enables the same hardening/usability modules as 
 | **Baseband Guard** | [vc-teahouse](https://github.com/vc-teahouse/Baseband-guard) | LSM that blocks writes to the modem/baseband partitions | `CONFIG_BBG=y` |
 | **NoMount** | [maxsteeel](https://github.com/maxsteeel/nomount) | Prevents unwanted mounts used for root detection | `CONFIG_NOMOUNT=y` |
 | **Droidspaces** | [ravindu644](https://github.com/ravindu644/Droidspaces-OSS) | Namespace/cgroup isolation to run isolated Android/Linux spaces | `CONFIG_NAMESPACES`, `CONFIG_*_NS`, cgroups, netfilter… |
+| **TCP BBR + fq** | Linux mainline | BBR is the default TCP congestion control, on the `fq` qdisc (see [TCP BBR](#-tcp-bbr)) | `CONFIG_DEFAULT_BBR=y`, `CONFIG_DEFAULT_FQ=y` |
 
 > ### Droidspaces — what works and what doesn't on this kernel
 > **Droidspaces works** (containers, namespaces, overlayfs and networking are all enabled). Two of its *optional* configs are **deliberately left off** because they don't build on this Spiteful 4.14 tree (both are also off in the stock defconfig):
@@ -39,6 +49,26 @@ On top of OriginSU, every build enables the same hardening/usability modules as 
 > Droidspaces' own docs list both as optional: *"without these two options everything else works; `--cpus` and the memory/swap limits are skipped with a warning."* Everything else — namespaces, the **pids** (`--pids-limit`), freezer, devices and net cgroups, overlayfs and NAT/macvlan networking — is enabled. `CONFIG_CGROUP_PIDS` is kept on safely because this kernel is monolithic (no loadable vendor modules, so no symbol-CRC bootloop risk).
 >
 > The cgroup patch applies as-is (this tree uses the `kernel/cgroup/cgroup.c` layout; a fallback also handles single-file `kernel/cgroup.c` trees). If you use Droidspaces with a systemd-based Linux space, mask the `NetworkManager` and `wpa_supplicant` services inside it (as noted upstream).
+
+### 🌐 TCP BBR
+
+The stock Spiteful config uses **BBRplus** (an out-of-tree BBR variant) on the **cake** qdisc, and does not build mainline BBR or `fq`. These builds switch the defaults to **mainline BBR on `fq`**, the pairing BBR is designed for:
+
+- `fq` sends packets at the rate BBR computes (`sk_pacing_rate`) and tells TCP not to pace by itself, which is more precise and cheaper on the CPU than TCP's per-connection pacing timer used with cake.
+- `cake` is built for routers that shape a known link speed; on a phone it does not use BBR's rate.
+- Mainline BBR is the version maintained in Linux and run by Google in production; BBRplus is a third-party variant.
+
+**BBRplus and cake are still built in**, so you can switch back at runtime (root shell, until reboot):
+
+```sh
+cat /proc/sys/net/ipv4/tcp_congestion_control                   # bbr
+cat /proc/sys/net/core/default_qdisc                            # fq
+cat /proc/sys/net/ipv4/tcp_available_congestion_control         # ... bbr bbrplus
+echo bbrplus > /proc/sys/net/ipv4/tcp_congestion_control        # Spiteful's original choice
+echo cake    > /proc/sys/net/core/default_qdisc                 # applies to interfaces brought up afterwards
+```
+
+The build fails if the final `.config` does not have `CONFIG_DEFAULT_TCP_CONG="bbr"` and `CONFIG_DEFAULT_NET_SCH="fq"`.
 
 ---
 
@@ -80,7 +110,7 @@ The SHA-256 sum and the full kernel `.config` of each variant are attached to th
 2. Download the zip from the [latest release](https://github.com/1992Ade/sm6150-origin-builder/releases/latest).
 3. Reboot to recovery and flash it (or `adb sideload <file>.zip`).
 4. Reboot to system.
-5. Install the **OriginSU manager** APK (`arm64-v8a` or `universal`) from the [OriginSU releases](https://github.com/samakshkambxj/OriginSU/releases) (use the same version as the kernel).
+5. Install the **OriginSU manager** APK (`arm64-v8a` or `universal`) from the [legacy-v4.3.0 release](https://github.com/KazeSU/KazeSU/releases/tag/v4.3.0) (same version as the kernel). Do **not** install the KazeSU v1.x manager with this kernel.
 
 The zip replaces the kernel and the `dtb` inside `boot` and flashes `dtbo`; your ROM's ramdisk is kept. It refuses to install on any device other than `sweet` / `sweetin`.
 
@@ -107,13 +137,14 @@ check  ──►  build (susfs)  ──┐
        └─►  build (manual) ──┴──►  release
 ```
 
-1. **check** — reads the latest stable OriginSU release, makes sure it ships the **manager APK**, and looks for a release named `originsu-<tag>` in this repo. If it already exists (or the manager is not published yet), the run stops there. It also pins the commit of JackA1ltman's SuSFS patches so both variants use the same one.
+1. **check** — selects the OriginSU tag (`v4.3.0` by default; only `v4.x` OriginSU tags are accepted) and makes sure its release ships the **manager APK**. It also pins the commit of JackA1ltman's SuSFS patches so both variants use the same one.
 2. **build** (×2, in parallel)
    - Clones tbyool's Spiteful kernel (`17.0`) and downloads the latest **Neutron Clang** toolchain.
    - Generates the config from `sweet_defconfig` (ThinLTO, EROFS, dm-verity…, as in perf_neon's sweet build) with `CONFIG_LOCALVERSION="-Spiteful-OriginSU"`.
-   - Integrates OriginSU at the exact release tag with its official `setup.sh`, plus a 4.14 fix (`<linux/ratelimit.h>`).
+   - Integrates OriginSU at the exact tag with its own `setup.sh` from that tag, cloned from the KazeSU repository (the build stops if the tag cannot be checked out), plus a 4.14 fix (`<linux/ratelimit.h>`).
    - **susfs:** applies `susfs_patch_to_4.14.patch` and the SuSFS inline hooks (`susfs_inline_hook_patches.sh`), with perf_neon's 4.14 fixes (uname spoof, `fs/stat.c`, `fs/open.c`).
    - **manual:** applies the manual hooks (`syscall_hook_patches.sh`) for `exec`, `faccessat`, `stat` and `reboot` only; OriginSU hooks `setuid`, `init.rc` and input by itself on 4.14.
+   - Enables Baseband Guard, NoMount, Droidspaces and TCP BBR + `fq` (see [Included features](#-included-features)).
    - Checks that every hook OriginSU expects is in place, exports the static SELinux symbols, compiles `Image.gz` + `dtb.img` + `dtbo.img` and packages them with [riarumoda's AnyKernel3](https://github.com/riarumoda/AnyKernel3).
 3. **release** — publishes a GitHub Release `originsu-<tag>` with both zips, their SHA-256 sums, the configs and release notes (OriginSU and SuSFS versions, kernel commit, kernel version, toolchain, build date).
 
@@ -121,8 +152,9 @@ check  ──►  build (susfs)  ──┐
 
 | Trigger | Behaviour |
 |---|---|
-| Every Sunday at 04:23 UTC | Builds **only** if a new OriginSU release (with its manager) is out |
-| Manual (`Run workflow`) | Always builds; you can pick an OriginSU tag, toggle KPM and choose whether to publish a release |
+| Manual (`Run workflow`) | Builds OriginSU `v4.3.0` (or another `v4.x` tag); you can toggle KPM and choose whether to publish a release |
+
+There is no scheduled build any more (OriginSU is discontinued).
 
 A manual run for a version that is already released **replaces** that release (useful to pick up kernel or SuSFS updates).
 
@@ -132,16 +164,13 @@ A manual run for a version that is already released **replaces** that release (u
 
 1. Fork the repository.
 2. Go to **Settings → Actions → General** and make sure Actions are enabled and **Workflow permissions** allow *Read and write* (needed to publish releases).
-3. In the **Actions** tab, enable scheduled workflows on the fork.
-4. Run **Build sweet Kernel (Spiteful) with OriginSU** once manually to create the first release.
-
-> GitHub disables scheduled workflows after **60 days without repository activity**. If automatic releases stop, re-enable the workflow in the Actions tab or push a commit.
+3. Run **Build sweet Kernel (Spiteful) with OriginSU** once manually to create the first release.
 
 ### Manual run options
 
 | Input | Default | Description |
 |---|---|---|
-| `originsu_ref` | *(latest release)* | OriginSU tag to build |
+| `originsu_ref` | `v4.3.0` | OriginSU tag to build (`v4.x` only) |
 | `kpm` | `false` | Enable `CONFIG_KPM` |
 | `publish` | `true` | Publish a GitHub Release (otherwise only build artifacts) |
 
@@ -156,11 +185,10 @@ A manual run for a version that is already released **replaces** that release (u
 | *Integrate OriginSU* fails with "hook … missing" | A hook script no longer matches the kernel code — check the run log |
 | Build fails with "You lost … hook" / "incompatible hook" | A new OriginSU version requires a different hook — re-run with an older `originsu_ref` |
 | Build fails with KPM errors | Re-run manually with `kpm` disabled |
-| No build although OriginSU released | The release has no manager APK yet; the next weekly run will pick it up |
 | Device stuck on boot logo | Flash the `-manual` variant, or restore your `boot`/`dtbo` backups |
 | Boots, but no Wi-Fi / mobile network / camera | Almost always a module conflict — see [Coming from another root solution?](#️-coming-from-another-root-solution) below |
 | The manager says "not installed" | Check `uname -r` (must contain `-Spiteful-OriginSU`) and the manager version |
-| No new release after an OriginSU update | Check that the scheduled workflow is still enabled (60-day rule above) |
+| Build fails with a BBR / fq error | The kernel config no longer selects BBR or `fq` by default — check the *TCP congestion control* lines in the compile log |
 
 Build logs (`build-log-*`) are attached to every run, even when it fails. Pressing *volume down* at least 3 times during boot enables KernelSU safe mode (modules disabled).
 
@@ -207,7 +235,7 @@ This project relies on the incredible work of the following open-source projects
 * **[tbyool](https://github.com/tbyool/android_kernel_xiaomi_sm6150)** — For the Spiteful kernel (branch `17.0`).
 * **[crDroid](https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150)** — For the sm6150 kernel tree Spiteful is forked from.
 * **[Project Infinity-X](https://projectinfinity-x.com/)** — For the ROM and its sweet maintainer.
-* **[OriginSU](https://github.com/samakshkambxj/OriginSU)** — For the kernel-based root solution.
+* **[OriginSU](https://github.com/KazeSU/KazeSU/releases/tag/v4.3.0)** (now [KazeSU](https://github.com/KazeSU/KazeSU)) — For the kernel-based root solution.
 * **[riarumoda](https://github.com/riarumoda/perf_neon-builder)** — For perf_neon-builder, whose sweet workflow this build is based on, and for the [AnyKernel3 fork](https://github.com/riarumoda/AnyKernel3) used for packaging.
 * **[osm0sis](https://github.com/osm0sis/AnyKernel3)** — For the original AnyKernel3.
 * **[JackA1ltman](https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd)** — For the 4.14 SuSFS backport and the non-GKI hook scripts.
